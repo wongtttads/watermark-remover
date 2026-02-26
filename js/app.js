@@ -128,39 +128,69 @@ class WatermarkRemover {
         ctx.drawImage(image, 0, 0);
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         const data = imageData.data;
-        const bottomHeight = Math.floor(canvas.height * 0.2);
+
+        const bottomHeight = Math.floor(canvas.height * 0.25);
         const startY = canvas.height - bottomHeight;
-        let maxContrast = 0;
+
+        let maxWatermarkScore = 0;
         let bestY = startY;
-        for (let y = startY; y < canvas.height - 20; y++) {
-            let contrast = 0;
+
+        for (let y = startY; y < canvas.height - 10; y++) {
+            let rowScore = 0;
+            let edgeCount = 0;
+            let textLikePixels = 0;
+
             for (let x = 0; x < canvas.width; x++) {
                 const idx = (y * canvas.width + x) * 4;
                 const r = data[idx];
                 const g = data[idx + 1];
                 const b = data[idx + 2];
+                const a = data[idx + 3];
+
                 const brightness = (r + g + b) / 3;
+
                 if (x > 0) {
                     const prevIdx = (y * canvas.width + (x - 1)) * 4;
-                    const prevBrightness = (data[prevIdx] + data[prevIdx + 1] + data[prevIdx + 2]) / 3;
-                    contrast += Math.abs(brightness - prevBrightness);
+                    const prevR = data[prevIdx];
+                    const prevG = data[prevIdx + 1];
+                    const prevB = data[prevIdx + 2];
+                    const prevBrightness = (prevR + prevG + prevB) / 3;
+                    
+                    const brightnessDiff = Math.abs(brightness - prevBrightness);
+                    
+                    if (brightnessDiff > 15) {
+                        edgeCount++;
+                        rowScore += brightnessDiff;
+                    }
+
+                    if (a < 240) {
+                        textLikePixels++;
+                    }
                 }
             }
-            contrast /= canvas.width;
-            if (contrast > maxContrast) {
-                maxContrast = contrast;
+
+            const edgeDensity = edgeCount / canvas.width;
+            const textDensity = textLikePixels / canvas.width;
+            const combinedScore = (edgeDensity * 2 + textDensity * 1.5);
+
+            if (combinedScore > maxWatermarkScore) {
+                maxWatermarkScore = combinedScore;
                 bestY = y;
             }
         }
-        if (maxContrast > 30) {
+
+        const threshold = Math.max(10, maxWatermarkScore * 0.3);
+        
+        if (maxWatermarkScore > threshold) {
             return {
                 x: 0,
                 y: bestY,
                 width: canvas.width,
                 height: canvas.height - bestY,
-                confidence: Math.min(maxContrast / 100, 1)
+                confidence: Math.min(maxWatermarkScore / 100, 1)
             };
         }
+
         return null;
     }
 
@@ -169,6 +199,7 @@ class WatermarkRemover {
         const ctx = canvas.getContext('2d');
         canvas.width = image.width;
         canvas.height = image.height;
+
         if (region) {
             const safeHeight = region.y;
             const tempCanvas = document.createElement('canvas');
@@ -177,14 +208,17 @@ class WatermarkRemover {
             tempCanvas.height = safeHeight;
             tempCtx.drawImage(image, 0, 0, image.width, safeHeight, 0, 0, image.width, safeHeight);
             ctx.drawImage(tempCanvas, 0, 0);
-            const gradient = ctx.createLinearGradient(0, safeHeight - 50, 0, safeHeight);
+
+            const gradientHeight = Math.min(100, region.height);
+            const gradient = ctx.createLinearGradient(0, safeHeight - gradientHeight, 0, safeHeight);
             gradient.addColorStop(0, 'rgba(255, 255, 255, 0)');
             gradient.addColorStop(1, 'rgba(255, 255, 255, 1)');
             ctx.fillStyle = gradient;
-            ctx.fillRect(0, safeHeight - 50, image.width, 50);
+            ctx.fillRect(0, safeHeight - gradientHeight, image.width, gradientHeight);
         } else {
             ctx.drawImage(image, 0, 0);
         }
+
         return new Promise((resolve) => {
             canvas.toBlob((blob) => {
                 resolve(blob);
@@ -234,7 +268,7 @@ class WatermarkRemover {
         if (result.status === 'completed') {
             status.innerHTML = '<span class="status-success">✓ 处理完成</span>';
             if (result.watermarkDetected) {
-                status.innerHTML += ' <span style="margin-left: 10px;">检测到水印</span>';
+                status.innerHTML += ' <span style="margin-left: 10px;">检测到水印 (置信度: ' + Math.round(result.watermarkRegion.confidence * 100) + '%)</span>';
             } else {
                 status.innerHTML += ' <span style="margin-left: 10px;">未检测到水印</span>';
             }
